@@ -1,0 +1,182 @@
+# Amazon Q Developer Configuration for PHP to Modern Stack Transformation
+version: "1.0"
+
+project:
+  name: "php-modernization"
+  description: "Transform PHP application to FastAPI and Next.js stack"
+
+source_code:
+  root_directory: "."
+  include_patterns:
+    - "apifolder/api/webapi/*.php"
+    - "admin/conn.php"
+    - "apifolder/api/functions2.php"
+  exclude_patterns:
+    - "**/vendor/**"
+    - "**/.git/**"
+    - "**/node_modules/**"
+
+output:
+  backend:
+    directory: "./backend"
+    framework: "fastapi"
+    python_version: "3.9"
+  frontend:
+    directory: "./frontend"
+    framework: "nextjs"
+    node_version: "16.x"
+
+transformations:
+  backend:
+    # Database transformation rules
+    - name: "database_connection"
+      description: "Transform MySQL connections to SQLAlchemy"
+      rules:
+        - pattern: "mysqli_connect\\(DB_SERVER, DB_USERNAME, DB_PASSWORD, DB_NAME\\)"
+          replacement: |
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker, Session
+            
+            SQLALCHEMY_DATABASE_URL = f"mysql://{DB_USERNAME}:{DB_PASSWORD}@{DB_SERVER}/{DB_NAME}"
+            engine = create_engine(SQLALCHEMY_DATABASE_URL)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            
+            def get_db():
+                db = SessionLocal()
+                try:
+                    yield db
+                finally:
+                    db.close()
+
+    # Authentication transformation rules
+    - name: "jwt_auth"
+      description: "Transform JWT authentication system"
+      rules:
+        - pattern: "function\\s+generate_jwt\\s*\\([^)]*\\)\\s*\\{[^}]*\\}"
+          replacement: |
+            from datetime import datetime, timedelta
+            from jose import JWTError, jwt
+            from fastapi import Depends, HTTPException, status
+            from fastapi.security import OAuth2PasswordBearer
+            
+            SECRET_KEY = "${JWT_SECRET_KEY}"
+            ALGORITHM = "HS256"
+            ACCESS_TOKEN_EXPIRE_MINUTES = 30
+            
+            oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+            
+            def create_access_token(data: dict):
+                to_encode = data.copy()
+                expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                to_encode.update({"exp": expire})
+                return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+            
+            def verify_token(token: str = Depends(oauth2_scheme)):
+                try:
+                    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                    return payload
+                except JWTError:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Could not validate credentials"
+                    )
+
+    # API endpoint transformation rules
+    - name: "api_endpoints"
+      description: "Transform PHP API endpoints to FastAPI routes"
+      rules:
+        - pattern: "<?php.*?include.*?conn\\.php.*?\\$res.*?\\["
+          replacement: |
+            from fastapi import APIRouter, Depends, HTTPException
+            from sqlalchemy.orm import Session
+            from typing import Dict, Any
+            from .database import get_db
+            from .auth import verify_token
+            
+            router = APIRouter()
+            
+            @router.post("")
+            async def endpoint(
+                request_data: Dict[str, Any],
+                db: Session = Depends(get_db),
+                current_user: Dict = Depends(verify_token)
+            ) -> Dict[str, Any]:
+
+        - pattern: "\\$res\\s*=\\s*\\["
+          replacement: "response_data: Dict[str, Any] = {"
+
+        - pattern: "echo json_encode\\(\\$res\\);"
+          replacement: "return response_data"
+
+  frontend:
+    - name: "api_client"
+      description: "Generate Next.js API client"
+      rules:
+        - pattern: "\\$\\.(ajax|post)\\s*\\({[^}]*}\\)"
+          replacement: |
+            import axios from 'axios';
+            
+            const api = axios.create({
+              baseURL: process.env.NEXT_PUBLIC_API_URL,
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            });
+
+pre_transform:
+  - name: "backup"
+    description: "Create backup of source code"
+    action:
+      command: "cp -r . ./backup_$(date +%Y%m%d_%H%M%S)"
+
+  - name: "create_structure"
+    description: "Create project structure"
+    action:
+      commands:
+        - "mkdir -p backend/app/{models,routers,core}"
+        - "mkdir -p frontend/{pages,components,services}"
+
+post_transform:
+  - name: "format_backend"
+    description: "Format Python code"
+    action:
+      command: "black backend/"
+
+  - name: "format_frontend"
+    description: "Format TypeScript/JavaScript code"
+    action:
+      command: "prettier --write frontend/"
+
+dependencies:
+  backend:
+    python_packages:
+      - "fastapi>=0.68.0,<0.69.0"
+      - "uvicorn>=0.15.0,<0.16.0"
+      - "sqlalchemy>=1.4.23,<1.5.0"
+      - "python-jose[cryptography]>=3.3.0,<3.4.0"
+      - "passlib[bcrypt]>=1.7.4,<1.8.0"
+      - "python-multipart>=0.0.5,<0.1.0"
+      - "pymysql>=1.0.2,<1.1.0"
+
+  frontend:
+    npm_packages:
+      - "next@12.0.0"
+      - "react@17.0.2"
+      - "react-dom@17.0.2"
+      - "@mui/material@5.0.0"
+      - "axios@0.24.0"
+      - "typescript@4.4.4"
+
+logging:
+  level: "INFO"
+  file: "./logs/transform.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+error_handling:
+  on_error: "continue"
+  max_retries: 3
+  backup_on_failure: true
+  ignore_patterns:
+    - "**/*.pyc"
+    - "**/__pycache__"
+    - "**/.env"
