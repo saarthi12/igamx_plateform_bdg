@@ -1,0 +1,42 @@
+# Database files
+*.sql
+*.sqlite
+*.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment and config files
+.env
+config.php
+*.config
+
+# Logs
+*.log
+logs/
+
+# Dependencies
+node_modules/
+vendor/
+qct-cli/
+
+# Compiled files
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
